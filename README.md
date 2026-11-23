@@ -64,6 +64,7 @@ npm run dev
 | 日志采集 | `log_collector` | 日志采集器 | 采集器名称、日志路径、解析模式 |
 | 代理池管理 | `proxy_pool` | 代理节点 | 代理地址、地理位置、响应延迟 |
 | 格式适配器 | `format_adapter` | 格式配置 | 配置名称、输入格式、输出格式 |
+| 转换抽取管线 | `pipeline`（前端页面 `/pipeline`，接口前缀 `/api/pipeline`） | 转换批次/拒绝记录/抽取结果 | 源行号、源字段、目标类型、拒绝原因 |
 | 采集执行日志 | `extraction_log` | 执行日志 | 执行时间、关联项目、状态 |
 | 页面变更监控 | `page_change` | 变更记录 | 目标页面、监测时间、变更类型 |
 | 数据采样器 | `data_sample` | 采样方案 | 方案名称、采样方式、采样比例 |
@@ -78,6 +79,33 @@ npm run dev
   `frontend/src/domain/<模块>.ts`，用于承载真实业务差异并维持36题位容量。
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+
+## 转换抽取管线（格式适配器 → 字段抽取器）
+
+格式适配器除输入输出配置外，新增离线 JSON 行到目标字段的转换管线
+（`backend/app/services/format_adapter.py` + `app/pipeline_store.py`），
+字段抽取器（`field_extractor.py`）消费转换后的目标字段而不是直接读源 JSON：
+
+- **不静默舍入**：数值小数位超过目标精度（如 `12.345` → `decimal(2)`）时
+  拒绝该单元格，原因码 `precision_overflow`，原值完整留档。
+- **两种「没有值」严格区分**：源记录缺字段记为 `missing`（可选字段不报错）；
+  单元格存在但转换失败记为 `rejected`。转换失败不会触发抽取模板的缺字段默认值。
+- **只交付可靠值**：抽取结果状态为 `delivered / defaulted / missing / pending_fix`，
+  待修结果带 `rejection_id`、源行号和源字段名，可定位到原始行和具体字段。
+- **补正可回溯**：补正后重提生成新批次并回填旧拒绝记录（`已补正` + 新批次号），
+  旧批次与旧拒绝记录的原值保持不变，重新打开仍能查到原始行和字段。
+
+接口前缀 `/api/pipeline`：`POST /conversions`、`POST /conversions/{id}/resubmit`、
+`GET /conversions`、`GET /rejections[?only_open=true]`、`POST /extractions` 等，
+前端在侧边栏「转换抽取管线」页面（`/pipeline`）操作。
+
+测试与场景走查（后端目录下）：
+
+```bash
+python3 -m unittest discover -s tests          # 单元测试，仅依赖标准库
+python3 tests/walkthrough_pipeline.py          # 服务层题目场景逐步走查
+# 启动服务后：python3 tests/e2e_pipeline.py    # HTTP 端到端核对
+```
 
 领域：数据工程
 子方向：数据采集、爬虫与RPA
